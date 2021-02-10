@@ -1,0 +1,204 @@
+---
+title: "Coursera Capstone Project Milestone Report"
+output: rmdformats::readthedown
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Synopsis
+
+This is the Milestone Report for week 2 of the Coursera Data Science Capstone
+project.
+
+The objective of this report is to develop an understanding of the various
+statistical properties of the data set that can later be used when building the
+prediction model for the final data product - the Shiny application. Using 
+exploratory data analysis, this report describes the major features of the
+training data and then summarizes my plans for creating the predictive model.
+
+The model will be trained using a unified document corpus compiled from the
+following three sources of text data:
+
+1. Blogs
+1. News
+1. Twitter
+
+The provided text data are provided in four different languages. This project
+will only focus on the English corpora.
+
+## Load the Data
+
+Download, unzip and load the training data.
+
+```{r}
+## Load CRAN modules 
+library(downloader)
+library(plyr);
+library(dplyr)
+library(knitr)
+library(tm)
+## Step 1: Download the dataset and unzip folder
+## Check if directory already exists?
+if(!file.exists("./projectData")){
+  dir.create("./projectData")
+}
+Url <- "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+## Check if zip has already been downloaded in projectData directory?
+if(!file.exists("./projectData/Coursera-SwiftKey.zip")){
+  download.file(Url,destfile="./projectData/Coursera-SwiftKey.zip",mode = "wb")
+}
+## Check if zip has already been unzipped?
+if(!file.exists("./projectData/final")){
+  unzip(zipfile="./projectData/Coursera-SwiftKey.zip",exdir="./projectData")
+}
+```
+Once the dataset is downloaded start reading it as this a huge dataset so we'll read line by line only the amount of data needed before doing that lets first list all the files in the directory
+List all the files of /final/en_US Dataset folder
+The data sets consist of text from 3 different sources: 1) News, 2) Blogs and 3) Twitter feeds. In this project, we will only focus on the English - US data sets.
+```{r}
+path <- file.path("./projectData/final" , "en_US")
+files<-list.files(path, recursive=TRUE)
+# Lets make a file connection of the twitter data set
+con <- file("./projectData/final/en_US/en_US.twitter.txt", "r") 
+#lineTwitter<-readLines(con,encoding = "UTF-8", skipNul = TRUE)
+lineTwitter<-readLines(con, skipNul = TRUE)
+# Close the connection handle when you are done
+close(con)
+# Lets make a file connection of the blog data set
+con <- file("./projectData/final/en_US/en_US.blogs.txt", "r") 
+#lineBlogs<-readLines(con,encoding = "UTF-8", skipNul = TRUE)
+lineBlogs<-readLines(con, skipNul = TRUE)
+# Close the connection handle when you are done
+close(con)
+# Lets make a file connection of the news data set
+con <- file("./projectData/final/en_US/en_US.news.txt", "r") 
+#lineNews<-readLines(con,encoding = "UTF-8", skipNul = TRUE)
+lineNews<-readLines(con, skipNul = TRUE)
+# Close the connection handle when you are done
+close(con)
+```
+We examined the data sets and summarize our findings (file sizes, line counts, word counts, and mean words per line) below.
+An initial investigation of the data shows that on average, each text corpora
+has a relatively low number of words per line. Blogs tend to have more words
+per line, followed by news and then twitter which has the least words per line.
+The lower number of words per line for the Twitter data is expected given that a
+tweet is limited to a certain number of characters. Even when Twitter doubled
+its character count from 140 to 280 characters in 2017, research shows that only
+1% of tweets hit the 280-character limit, and only 12% of tweets are longer than
+140 characters. Perhaps after so many years, users were simply trained to the
+140-character limit.
+```{r}
+library(stringi)
+# Get file sizes
+lineBlogs.size <- file.info("./projectData/final/en_US/en_US.blogs.txt")$size / 1024 ^ 2
+lineNews.size <- file.info("./projectData/final/en_US/en_US.news.txt")$size / 1024 ^ 2
+lineTwitter.size <- file.info("./projectData/final/en_US/en_US.twitter.txt")$size / 1024 ^ 2
+# Get words in files
+lineBlogs.words <- stri_count_words(lineBlogs)
+lineNews.words <- stri_count_words(lineNews)
+lineTwitter.words <- stri_count_words(lineTwitter)
+# Summary of the data sets
+data.frame(source = c("blogs", "news", "twitter"),
+           file.size.MB = c(lineBlogs.size, lineNews.size, lineTwitter.size),
+           num.lines = c(length(lineBlogs), length(lineNews), length(lineTwitter)),
+           num.words = c(sum(lineBlogs.words), sum(lineNews.words), sum(lineTwitter.words)),
+           mean.num.words = c(mean(lineBlogs.words), mean(lineNews.words), mean(lineTwitter.words)))
+```
+## Cleaning The Data
+Before performing exploratory analysis, we must clean the data first. This involves removing URLs, special characters, punctuations, numbers, excess whitespace, stopwords, and changing the text to lower case. Since the data sets are quite large, we will randomly choose 2% of the data to demonstrate the data cleaning and exploratory analysis also please take care of the UTF chars.
+```{r}
+library(tm)
+# Sample the data
+set.seed(5000)
+data.sample <- c(sample(lineBlogs, length(lineBlogs) * 0.02),
+                 sample(lineNews, length(lineNews) * 0.02),
+                 sample(lineTwitter, length(lineTwitter) * 0.02))
+# Create corpus and clean the data
+corpus <- VCorpus(VectorSource(data.sample))
+toSpace <- content_transformer(function(x, pattern) gsub(pattern, " ", x))
+corpus <- tm_map(corpus, toSpace, "(f|ht)tp(s?)://(.*)[.][a-z]+")
+corpus <- tm_map(corpus, toSpace, "@[^\\s]+")
+corpus <- tm_map(corpus, tolower)
+corpus <- tm_map(corpus, removeWords, stopwords("en"))
+corpus <- tm_map(corpus, removePunctuation)
+corpus <- tm_map(corpus, removeNumbers)
+corpus <- tm_map(corpus, stripWhitespace)
+corpus <- tm_map(corpus, PlainTextDocument)
+```
+
+
+## Exploratory Analysis
+Exploratory data analysis will be performed to fulfill the primary goal for
+this report. Several techniques will be employed to develop an understanding of
+the training data which include looking at the most frequently used words,
+tokenizing and n-gram generation.
+```{r}
+library(RWeka)
+library(ggplot2)
+##annotate
+options(mc.cores=1)
+# we'll get the frequencies of the word
+getFreq <- function(tdm) {
+  freq <- sort(rowSums(as.matrix(tdm)), decreasing = TRUE)
+  return(data.frame(word = names(freq), freq = freq))
+}
+bigram <- function(x) NGramTokenizer(x, Weka_control(min = 2, max = 2))
+trigram <- function(x) NGramTokenizer(x, Weka_control(min = 3, max = 3))
+makePlot <- function(data, label) {
+  ggplot(data[1:30,], aes(reorder(word, -freq), freq)) +
+         labs(x = label, y = "Frequency") +
+         theme(axis.text.x = element_text(angle = 60, size = 12, hjust = 1)) +
+         geom_bar(stat = "identity", fill = I("blue"))
+}
+# Get frequencies of most common n-grams in data sample
+freq1 <- getFreq(removeSparseTerms(TermDocumentMatrix(corpus), 0.9999))
+freq2 <- getFreq(removeSparseTerms(TermDocumentMatrix(corpus, control = list(tokenize = bigram)), 0.9999))
+freq3 <- getFreq(removeSparseTerms(TermDocumentMatrix(corpus, control = list(tokenize = trigram)), 0.9999))
+```
+
+
+## UNIGRAMS
+Here is a histogram of the 30 most common unigrams in the data sample.
+```{r}
+makePlot(freq1, "30 Most Common Uni-grams")
+```
+
+
+## BIGRAMS
+Here is a histogram of the 30 most common bigrams in the data sample.
+
+```{r}
+makePlot(freq2, "30 Most Common Bi-grams")
+```
+
+
+## TRIGRAMS
+Here is a histogram of the 30 most common trigrams in the data sample.
+```{r}
+makePlot(freq3, "30 Most Common Tri-grams")
+```
+
+
+## Way Forward
+
+The final deliverable in the capstone project is to build a predictive algorithm
+that will be deployed as a Shiny app for the user interface. The Shiny app
+should take as input a phrase (multiple words) in a text box input and output a
+prediction of the next word.
+
+The predictive algorithm will be developed using an n-gram model with a
+word frequency lookup similar to that performed in the exploratory data analysis
+section of this report. A strategy will be built based on the knowledge 
+gathered during the exploratory analysis. For example, as n increased for
+each n-gram, the frequency decreased for each of its terms. So one possible
+strategy may be to construct the model to first look for the unigram that would
+follow from the entered text. Once a full term is entered followed by a space,
+find the most common bigram model and so on.
+
+Another possible strategy may be to predict the next word using the trigram
+model. If no matching trigram can be found, then the algorithm would check the
+bigram model. If still not found, use the unigram model.
+
+The final strategy will be based on the one that increases efficiency and
+provides the best accuracy.
+
